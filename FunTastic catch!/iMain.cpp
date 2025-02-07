@@ -9,7 +9,10 @@
 // Screen size
 int screenSizeX = 1000;
 int screenSizeY = 800;
+int maxDepth = 4000;
+
 int playBg_y = screenSizeY;
+int playBg_x = 0;
 int rod_x = 218;
 int rod_y = 530;
 int string_length = 10;
@@ -18,12 +21,15 @@ int hook_x = rod_x;
 int hook_y = rod_y;
 int string_move_speed = 5;
 
+int cat_x = 5;
+int cat_y = 435;
+
 int screen_scroll_speed = 10;
 
 const int MAX_FISH_NUMBER = 30;
 
 // Background images
-int menuBg, aboutUsBg, highScoreBg, playBg; // Added playBg
+int menuBg, aboutUsBg, highScoreBg, playBg, catBg; // Added playBg
 
 //Fish var
 enum FishType { BLUEANGEL, HOLUD, LALTHOT, BEGUNITHOT };
@@ -111,7 +117,7 @@ void drawBackButton() {
 
 //FISHFISH
 struct Fish{
-	int x, y; //position
+	int fish_x, fish_y; //position
 	int width, height;
 	FishType type;
 
@@ -119,7 +125,7 @@ struct Fish{
 	bool movingRight;
 	int imageRight;
 	int imageLeft;
-	//FishType type;
+	bool isAttached = false;
 };
 Fish fishArray[50];
 
@@ -187,8 +193,9 @@ Fish createFish() {
 
 
 	// Random position and direction
-	fish.x = rand() % screenSizeX;
-	fish.y = rand() % (screenSizeY/2);  //need further modification
+	fish.fish_x = rand() % screenSizeX;
+	fish.fish_y =-( rand() % (maxDepth));  //need further modification
+	printf("%d", fish.fish_y);
 	fish.movingRight = rand() % 2;
 
 	return fish;
@@ -209,19 +216,21 @@ void drawFishes() {
 		Fish &fish = fishArray[i];
 		char imageRight[100], imageLeft[100];
 		int fishImage = fish.movingRight ? fish.imageRight : fish.imageLeft;
-		iShowImage(fish.x, fish.y, fish.width, fish.height, fishImage);
+		iShowImage(fish.fish_x, fish.fish_y, fish.width, fish.height, fishImage);
 
 	}
 }
+
+
 
 void moveFish() {
 	for (int i = 0; i <5; i++) {
 		Fish &fish = fishArray[i];
-		fish.x += fish.movingRight ? fish.speed : -fish.speed;
+		fish.fish_x += fish.movingRight ? fish.speed : -fish.speed;
 
 		// Wrap around screen
-		if (fish.x > screenSizeX) fish.x = -fish.width;
-		if (fish.x + fish.width < 0) fish.x = screenSizeX;
+		if (fish.fish_x > screenSizeX) fish.fish_x = -fish.width;
+		if (fish.fish_x + fish.width < 0) fish.fish_x = screenSizeX;
 	}
 
 
@@ -229,6 +238,52 @@ void moveFish() {
 
 
 }
+
+
+void moveFishVertically(int direction){
+
+
+
+	for (int i = 0; i < 5; i++){
+		Fish &fish = fishArray[i];
+		fish.fish_y =fish.fish_y + (direction) * screen_scroll_speed;
+	}
+}
+
+
+bool checkCollision(int hookX, int hookY, int hookRadius, Fish fish) {
+	return !(hookX + hookRadius < fish.fish_x || hookX - hookRadius > fish.fish_x + fish.width ||
+		hookY + hookRadius < fish.fish_y || hookY - hookRadius > fish.fish_y + fish.height);
+}
+
+
+void fishAttach(int i){
+
+	Fish &fish = fishArray[i];
+	fish.fish_y = hook_y-fish.height/2;
+	fish.fish_x = hook_x-5;
+
+	//218 530
+	if (hook_x<=225 && hook_y>=530)
+		fishArray[i] = createFish();
+		
+
+
+}
+void handleCollisions() {
+	for (int i = 0; i < 5; i++) {
+	if (checkCollision(hook_x, hook_y, hook_radius, fishArray[i])) {
+	// Respawn the fish or handle the caught fish logic
+	 //fishArray[i] = createFish();
+		fishAttach(i);
+	}
+	}
+}
+
+
+
+
+
 
 // Draw the main menu screen 16 jan
 void drawMenu() {
@@ -265,6 +320,7 @@ void drawMenu() {
 			iText(textX, textY, buttonLabels[i], GLUT_BITMAP_8_BY_13);
 		}
 	}
+
 }
 
 // Draw the "About Us" screen 16 jan
@@ -292,7 +348,8 @@ void drawHighScore() {
 // Draw the "Play" screen (Game screen, could be just a placeholder for now)
 void drawPlay() {
 	iClear();
-	iShowImage(0, -playBg_y, screenSizeX, screenSizeY * 2, playBg); // Display the play background image
+	iShowImage(playBg_x, -playBg_y-2400, 1600, maxDepth, playBg); // Display the play background image
+	iShowImage(cat_x, cat_y, 240, 200, catBg);
 	//iSetColor(155, 75, 0);
 	// iFilledRectangle(218,530, 50, 15);
 	iSetColor(155, 75, 0);
@@ -300,6 +357,7 @@ void drawPlay() {
 	iSetColor(155, 75, 0);
 	iFilledCircle(hook_x, hook_y, hook_radius);
 	drawFishes();
+	handleCollisions();
 }
 
 // Main drawing function
@@ -398,9 +456,11 @@ void iKeyboard(unsigned char key) {
 
 		if (playBg_y < screenSizeY) {
 			playBg_y += screen_scroll_speed; // Move up, but do not go above the top of the image
-			
+			cat_y -= screen_scroll_speed;
 			rod_y -= screen_scroll_speed;
+			moveFishVertically(-1);
 		}
+
 		if (hook_y<530){
 			hook_y += string_move_speed;
 		}
@@ -408,14 +468,22 @@ void iKeyboard(unsigned char key) {
 	}
 	if (key == 's'){
 
-		if (playBg_y>0){
+		
+		if (playBg_y>-2400){
 			playBg_y -= screen_scroll_speed;
-			
-			rod_y += screen_scroll_speed;// Move down continuously *********
+			cat_y += screen_scroll_speed;
+			rod_y += screen_scroll_speed;// Move down continuously 
+			moveFishVertically(1);
+		}
+		else{
+			if (hook_y>0)
+				hook_y -= string_move_speed;
 		}
 
-		if (hook_y>0)
+		if (hook_y>350)
 			hook_y -= string_move_speed;
+			
+		
 	
 
 		
@@ -438,10 +506,16 @@ void iKeyboard(unsigned char key) {
 
 void iSpecialKeyboard(unsigned char key) {
 	if (key == GLUT_KEY_RIGHT) {
-		printf("Right arrow key pressed!\n");
+		
+		cat_x += 5;
+		rod_x += 5;
+		playBg_x -= 5;
 	}
 	if (key == GLUT_KEY_LEFT) {
-		printf("Left arrow key pressed!\n");
+		cat_x -= 5;
+		rod_x -= 5;
+		playBg_x += 5;
+		
 	}
 	if (key == GLUT_KEY_UP) {
 		printf("Up arrow key pressed!\n");
@@ -454,14 +528,40 @@ void iSpecialKeyboard(unsigned char key) {
 	}
 }
 
+void loadRandomBg(){
+	int randomNum = rand() % 4;
+	printf("\nbg load %d", randomNum);
+	switch (randomNum)
+	{
+	case 0:
+		playBg = iLoadImage("asset\\background\\green_hill_bg.png");
+		break;
+	case 1:
+		playBg = iLoadImage("asset\\background\\cherry_bg.png");
+		break;
+	case 2:
+		playBg = iLoadImage("asset\\background\\night_bg.png");
+		break;
+	default:
+		playBg = iLoadImage("asset\\background\\morning_bg.png");
+		break;
+	}
+}
+
 int main() {
 	iInitialize(screenSizeX, screenSizeY, "Fun-tastic Catch!");
 
+	srand(time(0));
 	// Load background images
 	menuBg = iLoadImage("asset\\background\\menu_bg.png");
 	aboutUsBg = iLoadImage("asset\\background\\about us.png");
 	highScoreBg = iLoadImage("asset\\background\\menu_bg.png");
-	playBg = iLoadImage("asset\\background\\pbg.png"); // Load play background image
+
+	loadRandomBg();
+
+	
+
+	catBg = iLoadImage("asset\\background\\cat.png");
 
 	//load bunch of fishes
 	blueAngel_left = iLoadImage("asset\\fish\\blueAngel_left.png");
@@ -477,13 +577,13 @@ int main() {
 	begunithot_left = iLoadImage("asset\\fish\\begunithot_left.png");
 
 
-	srand(time(0));
+	
 	spawnFish();
 	iSetTimer(20, moveFish);
 
-	// Play background music in a loop, and ensure it doesn't stop when switching screens
+	//Play background music in a loop, and ensure it doesn't stop when switching screens
 	bgMusic
-		mciSendString("play bgmusic repeat", NULL, 0, NULL);
+	mciSendString("play bgmusic repeat", NULL, 0, NULL);
 
 	initializeButtons();
 	iStart();
