@@ -3,9 +3,17 @@
 #include <windows.h>
 #include <mmsystem.h>
 #include <ctime>
+#include <fstream>
+#include <vector>
+#include <algorithm>
+#include <iostream> // Added for cout support
 #pragma comment(lib, "winmm.lib")
 #define buttonMusic mciSendString("open \"asset\\music\\button sound.wav\" type waveaudio alias buttonSound", NULL, 0, NULL);
+#define octopusMusic mciSendString("open \"asset\\music\\octopus_collision.wav\" type waveaudio alias octopusSound", NULL, 0, NULL); // Added for octopus sound
 #define bgMusic mciSendString("open \"asset\\music\\music_bg.wav\" type mpegvideo alias bgmusic", NULL, 0, NULL);
+#define sharkSound mciSendString("open \"asset\\music\\shark_sound.wav\" type waveaudio alias sharkSound", NULL, 0, NULL);
+
+using namespace std; // Added to resolve std namespace issues
 
 // Screen size
 int screenSizeX = 1000;
@@ -32,7 +40,7 @@ int screen_scroll_speed = 10;
 const int MAX_FISH_NUMBER = 35;
 
 // Background images
-int menuBg, aboutUsBg, highScoreBg, playBg, catBg, gameOverBg;
+int menuBg, aboutUsBg, highScoreBg, playBg, catBg, gameOverBg, pauseOverlay;
 
 // Fish variables
 enum FishType { BLUEANGEL, HOLUD, LALTHOT, BEGUNITHOT, FREEZEORB, SHARK, HOLUDDORI, NEMO, OCTOPUS, MAGNETORB };
@@ -63,6 +71,11 @@ int magnetDuration = 5000;
 clock_t magnetStartTime = 0;
 
 int three_hp_pic, two_hp_pic, one_hp_pic;
+int blood_image; // Blood image variable
+bool showBlood = false; // Blood visibility status
+int blood_x = 0, blood_y = 0; // Blood position
+clock_t bloodStartTime = 0; // Blood image start time
+int bloodDuration = 500; // Blood image duration in milliseconds
 
 int total_money = 0;
 int depth = 0;
@@ -74,21 +87,31 @@ int moneyPopupY = 0;
 int moneyPopupValue = 0;
 int moneyPopupTimer = 0;
 
+// High Score variables
+struct HighScore {
+	int score;
+	HighScore(int s = 0) : score(s) {} // Default constructor with default value 0
+	bool operator<(const HighScore& other) const { return score > other.score; } // For descending order
+};
+std::vector<HighScore> highScores;
+const int MAX_HIGH_SCORES = 5;
+const char* HIGH_SCORE_FILE = "highscores.txt";
+
 // Button properties
 struct Button {
 	int x, y;
 	int width, height;
 	bool isHovered;
-} buttons[4], gameOverButtons[2], gameOverExitButton;
+} buttons[4], gameOverButtons[2];
 
 char* buttonLabels[] = { "Play", "High Score", "About Us", "Exit" };
 char* gameOverButtonLabels[] = { "Restart", "Main Menu" };
-char* gameOverExitLabel = "Exit";
 
 struct Button backButton = { 20, screenSizeY - 75, 200, 50, false };
 
 enum Screen { MENU, PLAY, HIGH_SCORE, ABOUT_US, GAME_OVER };
 Screen currentScreen = MENU;
+bool isPaused = false;
 
 void initializeButtons() {
 	int buttonWidth = 200;
@@ -104,25 +127,14 @@ void initializeButtons() {
 		buttons[i].isHovered = false;
 	}
 
-	// Initialize game over buttons with larger size
-	int gameOverButtonWidth = 300;
-	int gameOverButtonHeight = 70;
-	startX = (screenSizeX - gameOverButtonWidth) / 2;
 	startY = 300;
 	for (int i = 0; i < 2; i++) {
 		gameOverButtons[i].x = startX;
-		gameOverButtons[i].y = startY - i * (gameOverButtonHeight + 30);
-		gameOverButtons[i].width = gameOverButtonWidth;
-		gameOverButtons[i].height = gameOverButtonHeight;
+		gameOverButtons[i].y = startY - i * (buttonHeight + 20);
+		gameOverButtons[i].width = buttonWidth;
+		gameOverButtons[i].height = buttonHeight;
 		gameOverButtons[i].isHovered = false;
 	}
-
-	// Initialize small exit button for game over screen
-	gameOverExitButton.x = 20;              // Left corner
-	gameOverExitButton.y = 100;             // Adjusted to be below Final Money (originally 50)
-	gameOverExitButton.width = 100;         // Small width
-	gameOverExitButton.height = 40;         // Small height
-	gameOverExitButton.isHovered = false;
 }
 
 void drawBackButton() {
@@ -298,6 +310,71 @@ bool checkCollision(int hookX, int hookY, int hookRadius, Fish fish) {
 		hookY + hookRadius < fish.fish_y || hookY - hookRadius > fish.fish_y + fish.height);
 }
 
+void loadHighScores() {
+	highScores.clear();
+	std::ifstream file(HIGH_SCORE_FILE);
+	if (file.is_open()) {
+		int score;
+		while (file >> score) {
+			highScores.push_back(HighScore(score));
+		}
+		file.close();
+		std::sort(highScores.begin(), highScores.end()); // Sort in descending order
+		if (highScores.size() > MAX_HIGH_SCORES) {
+			highScores.resize(MAX_HIGH_SCORES);
+		}
+	}
+	else {
+		cout << "Warning: Could not open " << HIGH_SCORE_FILE << ". Starting with empty high scores." << endl;
+	}
+}
+
+void saveHighScores() {
+	std::ofstream file(HIGH_SCORE_FILE);
+	if (file.is_open()) {
+		for (size_t i = 0; i < highScores.size() && i < MAX_HIGH_SCORES; i++) {
+			file << highScores[i].score << std::endl;
+		}
+		file.close();
+	}
+	else {
+		cout << "Error: Could not save to " << HIGH_SCORE_FILE << endl;
+	}
+}
+
+void updateHighScores(int newScore) {
+	highScores.push_back(HighScore(newScore));
+	std::sort(highScores.begin(), highScores.end());
+	if (highScores.size() > MAX_HIGH_SCORES) {
+		highScores.resize(MAX_HIGH_SCORES);
+	}
+	saveHighScores();
+}
+
+void drawHighScore() {
+	iClear();
+	iShowImage(0, 0, screenSizeX, screenSizeY, highScoreBg);
+
+	iSetColor(255, 255, 255);
+	int titleWidth = 12 * strlen("High Scores");
+	int titleX = (screenSizeX - titleWidth) / 2;
+	int titleY = screenSizeY - 100;
+	//iText(titleX, titleY, "High Scores", GLUT_BITMAP_HELVETICA_18);
+
+	int startY = screenSizeY - 300; // Lowered text position as previously requested
+	for (size_t i = 0; i < highScores.size(); i++) {
+		char scoreText[50];
+		sprintf_s(scoreText, sizeof(scoreText), "%d. Tk.%d", i + 1, highScores[i].score);
+		iText(screenSizeX / 2 - 50, startY - i * 40, scoreText, GLUT_BITMAP_HELVETICA_18);
+	}
+
+	if (highScores.empty()) {
+		iText(screenSizeX / 2 - 70, startY, "No scores yet!", GLUT_BITMAP_HELVETICA_18);
+	}
+
+	drawBackButton();
+}
+
 void resetGame() {
 	hp = 3;
 	total_money = 0;
@@ -312,13 +389,50 @@ void resetGame() {
 	isFrozen = false;
 	isInk = false;
 	isMagnet = false;
+	isPaused = false;
 	spawnFish();
 }
 
 void successfulCatch(int i) {
 	Fish &fish = fishArray[i];
 
-	if (fish.type != SHARK && fish.type != OCTOPUS && fish.type != MAGNETORB) {
+	if (fish.type == SHARK) {
+		// Check if any fish are attached
+		bool hasAttachedFish = false;
+		for (int j = 0; j < MAX_FISH_NUMBER; j++) {
+			if (fishArray[j].isAttached) {
+				hasAttachedFish = true;
+				break;
+			}
+		}
+
+		// If a shark is caught, decrement hp and respawn only the caught shark
+		if (hp > 0) {
+			hp--;
+		}
+
+		// Show blood image near the hook only if there are attached fish
+		if (hasAttachedFish) {
+			showBlood = true;
+			blood_x = hook_x - 120;
+			blood_y = hook_y - 120;
+			bloodStartTime = clock(); // Start blood image timer
+		}
+
+		// Play shark sound only if the game is not over
+		if (hp > 0) {
+			mciSendString("play sharkSound from 0", NULL, 0, NULL);
+		}
+
+		// Iterate through the fish array and reset any fish that are attached to the hook
+		for (int j = 0; j < MAX_FISH_NUMBER; j++) {
+			if (fishArray[j].isAttached) {
+				fishArray[j] = createFish();
+			}
+		}
+		fishArray[i] = createFish(); // Also respawn the caught shark
+	}
+	else if (fish.type != SHARK && fish.type != OCTOPUS && fish.type != MAGNETORB) {
 		total_money += fish.money;
 		moneyPopupX = hook_x;
 		moneyPopupY = hook_y;
@@ -329,8 +443,11 @@ void successfulCatch(int i) {
 
 	fishArray[i] = createFish();
 
+	// Check for game over after each catch
 	if (hp <= 0) {
 		currentScreen = GAME_OVER;
+		mciSendString("open \"asset\\music\\game_over.wav\" type waveaudio alias gameOver", NULL, 0, NULL);
+		mciSendString("play gameOver from 0", NULL, 0, NULL);
 	}
 }
 
@@ -344,13 +461,13 @@ void fishAttach(int i) {
 		return;
 	}
 	else if (fish.type == SHARK) {
-		hp--;
-		successfulCatch(i);
+		successfulCatch(i); // Let successfulCatch handle hp decrement
 		return;
 	}
 	else if (fish.type == OCTOPUS) {
 		isInk = true;
 		inkStartTime = clock();
+		mciSendString("play octopusSound from 0", NULL, 0, NULL); // Play octopus sound on collision
 		successfulCatch(i);
 		return;
 	}
@@ -370,6 +487,8 @@ void fishAttach(int i) {
 }
 
 void moveFish() {
+	if (isPaused) return;
+
 	if (isFrozen) {
 		if ((clock() - freezeStartTime) * 1000 / CLOCKS_PER_SEC > freezeDuration) {
 			isFrozen = false;
@@ -384,6 +503,11 @@ void moveFish() {
 			isMagnet = false;
 		else {
 			for (int i = 0; i < MAX_FISH_NUMBER; i++) {
+				// Skip octopuses and sharks
+				if (fishArray[i].type == OCTOPUS || fishArray[i].type == SHARK) {
+					continue;  // Move to next fish without applying magnet effect
+				}
+
 				int dx = hook_x - fishArray[i].fish_x;
 				int dy = hook_y - fishArray[i].fish_y;
 				float distance = sqrt(dx * dx + dy * dy);
@@ -449,14 +573,8 @@ void drawAboutUs() {
 	int titleWidth = 12 * strlen("About Us");
 	int titleX = (screenSizeX - titleWidth) / 2;
 	int titleY = screenSizeY - 100;
-	iSetColor(255, 255, 255);
-	iText(titleX, titleY, "About Us", GLUT_BITMAP_9_BY_15);
-	drawBackButton();
-}
-
-void drawHighScore() {
-	iClear();
-	iShowImage(0, 0, screenSizeX, screenSizeY, highScoreBg);
+	//iSetColor(255, 255, 255);
+	//iText(titleX, titleY, "About Us", GLUT_BITMAP_9_BY_15);
 	drawBackButton();
 }
 
@@ -481,7 +599,9 @@ void drawPlay() {
 			isInk = false;
 	}
 
-	handleCollisions();
+	if (!isPaused) {
+		handleCollisions();
+	}
 
 	if (moneyPopupTimer > 0) {
 		char popupText[20];
@@ -511,23 +631,36 @@ void drawPlay() {
 	sprintf_s(depthText, sizeof(depthText), "Depth: %dm", depth);
 	iSetColor(255, 255, 0);
 	iText(screenSizeX - 110, screenSizeY - 60, depthText, GLUT_BITMAP_HELVETICA_18);
+
+	if (isPaused) {
+		iShowImage(0, 0, screenSizeX, screenSizeY, pauseOverlay);
+		//iSetColor(255, 255, 255);
+		//iText(screenSizeX / 2 - 40, screenSizeY / 2, "PAUSED", GLUT_BITMAP_HELVETICA_18);
+	}
+	// Draw blood image if visible and within the duration
+	if (showBlood) {
+		iShowImage(blood_x, blood_y, 300, 300, blood_image);
+		if ((clock() - bloodStartTime) * 1000 / CLOCKS_PER_SEC > bloodDuration) {
+			showBlood = false;
+		}
+	}
 }
 
 void drawGameOver() {
 	iClear();
 	iShowImage(0, 0, screenSizeX, screenSizeY, gameOverBg);
 
-	// Game Over text
-	//iSetColor(255, 0, 0);
-	//iText(screenSizeX / 2 - 50, screenSizeY - 100, "Game Over!", GLUT_BITMAP_HELVETICA_18);
+	static bool scoreUpdated = false;
+	if (!scoreUpdated) {
+		updateHighScores(total_money);
+		scoreUpdated = true;
+	}
 
-	// Final score
 	char finalScore[50];
 	sprintf_s(finalScore, sizeof(finalScore), "Final Money: Tk.%d", total_money);
 	iSetColor(0, 0, 139);
-	iText(screenSizeX / 2 - 100, screenSizeY - 200, finalScore, GLUT_BITMAP_TIMES_ROMAN_24);
+	iText(screenSizeX / 2 - 70, screenSizeY - 370, finalScore, GLUT_BITMAP_HELVETICA_18);
 
-	// Draw Restart and Main Menu buttons
 	for (int i = 0; i < 2; i++) {
 		Button btn = gameOverButtons[i];
 		if (btn.isHovered) {
@@ -540,40 +673,17 @@ void drawGameOver() {
 		}
 
 		iSetColor(255, 255, 255);
-		int textWidth = 12 * strlen(gameOverButtonLabels[i]);
+		int textWidth = 8 * strlen(gameOverButtonLabels[i]);
 		int textX = btn.x + (btn.width - textWidth) / 2;
-		int textHeight = 18;
+		int textHeight = 12;
 		int textY = btn.y + (btn.height - textHeight) / 2;
 
 		if (btn.isHovered) {
-			iText(textX, textY, gameOverButtonLabels[i], GLUT_BITMAP_TIMES_ROMAN_24);
+			iText(textX, textY, gameOverButtonLabels[i], GLUT_BITMAP_9_BY_15);
 		}
 		else {
-			iText(textX, textY, gameOverButtonLabels[i], GLUT_BITMAP_HELVETICA_18);
+			iText(textX, textY, gameOverButtonLabels[i], GLUT_BITMAP_8_BY_13);
 		}
-	}
-
-	// Draw small Exit button (below Final Money)
-	if (gameOverExitButton.isHovered) {
-		iSetColor(0, 102, 204);
-		iFilledRectangle(gameOverExitButton.x - 5, gameOverExitButton.y - 5, gameOverExitButton.width + 10, gameOverExitButton.height + 10);
-	}
-	else {
-		iSetColor(86, 164, 230);
-		iFilledRectangle(gameOverExitButton.x, gameOverExitButton.y, gameOverExitButton.width, gameOverExitButton.height);
-	}
-
-	iSetColor(255, 255, 255);
-	int exitTextWidth = 8 * strlen(gameOverExitLabel);
-	int exitTextX = gameOverExitButton.x + (gameOverExitButton.width - exitTextWidth) / 2;
-	int exitTextHeight = 12;
-	int exitTextY = gameOverExitButton.y + (gameOverExitButton.height - exitTextHeight) / 2;
-
-	if (gameOverExitButton.isHovered) {
-		iText(exitTextX, exitTextY, gameOverExitLabel, GLUT_BITMAP_9_BY_15);
-	}
-	else {
-		iText(exitTextX, exitTextY, gameOverExitLabel, GLUT_BITMAP_8_BY_13);
 	}
 }
 
@@ -617,14 +727,6 @@ void iPassiveMouseMove(int mx, int my) {
 				gameOverButtons[i].isHovered = false;
 			}
 		}
-		// Check hover for Exit button
-		if (mx >= gameOverExitButton.x && mx <= gameOverExitButton.x + gameOverExitButton.width &&
-			my >= gameOverExitButton.y && my <= gameOverExitButton.y + gameOverExitButton.height) {
-			gameOverExitButton.isHovered = true;
-		}
-		else {
-			gameOverExitButton.isHovered = false;
-		}
 	}
 	else {
 		if (mx >= backButton.x && mx <= backButton.x + backButton.width &&
@@ -660,20 +762,14 @@ void iMouse(int button, int state, int mx, int my) {
 				if (mx >= gameOverButtons[i].x && mx <= gameOverButtons[i].x + gameOverButtons[i].width &&
 					my >= gameOverButtons[i].y && my <= gameOverButtons[i].y + gameOverButtons[i].height) {
 					mciSendString("play buttonSound from 0", NULL, 0, NULL);
-					if (i == 0) { // Restart
+					if (i == 0) {
 						currentScreen = PLAY;
 						resetGame();
 					}
-					else if (i == 1) { // Main Menu
+					else if (i == 1) {
 						currentScreen = MENU;
 					}
 				}
-			}
-			// Handle Exit button click
-			if (mx >= gameOverExitButton.x && mx <= gameOverExitButton.x + gameOverExitButton.width &&
-				my >= gameOverExitButton.y && my <= gameOverExitButton.y + gameOverExitButton.height) {
-				mciSendString("play buttonSound from 0", NULL, 0, NULL);
-				exit(0); // Exit the game
 			}
 		}
 		else if (currentScreen == ABOUT_US || currentScreen == HIGH_SCORE || currentScreen == PLAY) {
@@ -691,48 +787,62 @@ void iMouseMove(int mx, int my) {}
 void iKeyboard(unsigned char key) {
 	if (currentScreen != PLAY) return;
 
-	if (key == '\r') printf("Enter key pressed!\n");
-	if (key == 'p') printf("P key pressed - Game paused!\n");
-
-	if (key == 'w') {
-		if (playBg_y < screenSizeY) {
-			playBg_y += screen_scroll_speed;
-			cat_y -= screen_scroll_speed;
-			rod_y -= screen_scroll_speed;
-			moveFishVertically(-1);
-			depth--;
-		}
-		if (hook_y < 340) {
-			hook_y += string_move_speed;
-			depth--;
-		}
-	}
-	if (key == 's') {
-		if (playBg_y > -2400) {
-			playBg_y -= screen_scroll_speed;
-			cat_y += screen_scroll_speed;
-			rod_y += screen_scroll_speed;
-			moveFishVertically(1);
-			depth++;
+	if (key == 'p' || key == 'P') {
+		isPaused = !isPaused;
+		if (isPaused) {
+			mciSendString("pause bgmusic", NULL, 0, NULL);
+			cout << "Game Paused!" << endl;
 		}
 		else {
-			if (hook_y > 0) {
-				hook_y -= string_move_speed;
-				depth++;
+			mciSendString("resume bgmusic", NULL, 0, NULL);
+			cout << "Game Resumed!" << endl;
+		}
+		return;
+	}
+
+	if (!isPaused) {
+		if (key == '\r') cout << "Enter key pressed!" << endl;
+
+		if (key == 'w') {
+			if (playBg_y < screenSizeY) {
+				playBg_y += screen_scroll_speed;
+				cat_y -= screen_scroll_speed;
+				rod_y -= screen_scroll_speed;
+				moveFishVertically(-1);
+				depth--;
+			}
+			if (hook_y < 340) {
+				hook_y += string_move_speed;
+				depth--;
 			}
 		}
-		if (hook_y > 350) hook_y -= string_move_speed;
-	}
-	else if (key == 'a') {
-		if (hook_x > 0) hook_x -= string_move_speed;
-	}
-	else if (key == 'd') {
-		if (hook_x < screenSizeX) hook_x += string_move_speed;
+		if (key == 's') {
+			if (playBg_y > -2400) {
+				playBg_y -= screen_scroll_speed;
+				cat_y += screen_scroll_speed;
+				rod_y += screen_scroll_speed;
+				moveFishVertically(1);
+				depth++;
+			}
+			else {
+				if (hook_y > 0) {
+					hook_y -= string_move_speed;
+					depth++;
+				}
+			}
+			if (hook_y > 350) hook_y -= string_move_speed;
+		}
+		else if (key == 'a') {
+			if (hook_x > 0) hook_x -= string_move_speed;
+		}
+		else if (key == 'd') {
+			if (hook_x < screenSizeX) hook_x += string_move_speed;
+		}
 	}
 }
 
 void iSpecialKeyboard(unsigned char key) {
-	if (currentScreen != PLAY) return;
+	if (currentScreen != PLAY || isPaused) return;
 
 	if (key == GLUT_KEY_RIGHT) {
 		if (cat_x < 800) {
@@ -753,9 +863,10 @@ void iSpecialKeyboard(unsigned char key) {
 void loadRandomBg() {
 	menuBg = iLoadImage("asset\\background\\menu_bg.png");
 	aboutUsBg = iLoadImage("asset\\background\\about us.png");
-	highScoreBg = iLoadImage("asset\\background\\menu_bg.png");
+	highScoreBg = iLoadImage("asset\\background\\highscore_bg.png");
 	catBg = iLoadImage("asset\\background\\cat.png");
-	gameOverBg = menuBg; // Using menuBg as placeholder
+	gameOverBg = iLoadImage("asset\\background\\game_over.png");
+	pauseOverlay = iLoadImage("asset\\background\\pause_overlay.png");
 	int randomNum = rand() % 4;
 	freeze_bg = iLoadImage("asset\\background\\freeze_bg.png");
 	ink_bg = iLoadImage("asset\\background\\ink_bg.png");
@@ -774,6 +885,7 @@ void loadPower() {
 	one_hp_pic = iLoadImage("asset\\power\\one_hp.png");
 	freezeOrb = iLoadImage("asset\\power\\freeze_orb.png");
 	magnetOrb = iLoadImage("asset\\power\\magnet_orb.png");
+	blood_image = iLoadImage("asset\\background\\blood.png"); // Load blood image
 }
 
 void loadFish() {
@@ -803,6 +915,7 @@ int main() {
 	loadFish();
 	loadPower();
 	spawnFish();
+	loadHighScores();
 
 	iSetTimer(20, moveFish);
 	iSetTimer(33, []() {
@@ -814,8 +927,10 @@ int main() {
 
 	bgMusic
 		mciSendString("play bgmusic repeat", NULL, 0, NULL);
+	octopusMusic // Load the octopus sound
+		sharkSound // Load the shark sound
 
-	initializeButtons();
+		initializeButtons();
 	iStart();
 
 	mciSendString("stop bgmusic repeat", NULL, 0, NULL);
